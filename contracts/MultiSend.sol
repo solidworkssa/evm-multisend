@@ -17,9 +17,20 @@ contract MultiSend is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Address for address payable;
 
+    // Custom Errors
+    error LengthMismatch();
+    error NoRecipients();
+    error TooManyRecipients();
+    error InsufficientValue();
+    error RefundFailed();
+    error ZeroTotalAmount();
+    error TotalAmountMismatch();
+    error InsufficientTokensReceived();
+
     // Events to track transactions
     event NativeSent(address indexed sender, uint256 totalValue, uint256 recipientCount);
     event TokenSent(address indexed sender, address indexed token, uint256 totalValue, uint256 recipientCount);
+
 
     /**
      * @notice Send Native Coin (ETH/BNB/MATIC) to multiple recipients
@@ -28,10 +39,10 @@ contract MultiSend is ReentrancyGuard {
      * @param amounts Array of amounts to send to each recipient (in wei)
      */
     function multiSendNative(address payable[] calldata recipients, uint256[] calldata amounts) external payable nonReentrant {
-        require(recipients.length == amounts.length, "MultiSend: Length mismatch");
-        require(recipients.length > 0, "MultiSend: No recipients");
+        if (recipients.length != amounts.length) revert LengthMismatch();
+        if (recipients.length == 0) revert NoRecipients();
         // Limit batch size to prevent out-of-gas errors
-        require(recipients.length <= 255, "MultiSend: Too many recipients (max 255)");
+        if (recipients.length > 255) revert TooManyRecipients();
 
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < amounts.length; ) {
@@ -39,7 +50,7 @@ contract MultiSend is ReentrancyGuard {
             unchecked { ++i; }
         }
 
-        require(msg.value >= totalAmount, "MultiSend: Insufficient value sent");
+        if (msg.value < totalAmount) revert InsufficientValue();
 
         // Distribute funds
         for (uint256 i = 0; i < recipients.length; ) {
@@ -55,7 +66,7 @@ contract MultiSend is ReentrancyGuard {
         if (remaining > 0) {
             // Using low-level call for refund to avoid griefing
             (bool success, ) = msg.sender.call{value: remaining}("");
-            require(success, "MultiSend: Refund failed");
+            if (!success) revert RefundFailed();
         }
 
         emit NativeSent(msg.sender, totalAmount, recipients.length);
@@ -75,10 +86,10 @@ contract MultiSend is ReentrancyGuard {
         uint256[] calldata amounts,
         uint256 totalAmount
     ) external nonReentrant {
-        require(recipients.length == amounts.length, "MultiSend: Length mismatch");
-        require(recipients.length > 0, "MultiSend: No recipients");
-        require(recipients.length <= 255, "MultiSend: Too many recipients (max 255)");
-        require(totalAmount > 0, "MultiSend: Zero total amount");
+        if (recipients.length != amounts.length) revert LengthMismatch();
+        if (recipients.length == 0) revert NoRecipients();
+        if (recipients.length > 255) revert TooManyRecipients();
+        if (totalAmount == 0) revert ZeroTotalAmount();
 
         // Verify total amount matches sum of amounts
         uint256 calculatedTotal = 0;
@@ -86,7 +97,7 @@ contract MultiSend is ReentrancyGuard {
             calculatedTotal += amounts[i];
             unchecked { ++i; }
         }
-        require(calculatedTotal == totalAmount, "MultiSend: Total amount mismatch");
+        if (calculatedTotal != totalAmount) revert TotalAmountMismatch();
 
         // Transfer funds from user to contract
         // This is safer/efficient than looping transferFrom
@@ -96,7 +107,7 @@ contract MultiSend is ReentrancyGuard {
         
         // Check actual received amount to handle fee-on-transfer tokens
         uint256 received = balanceAfter - balanceBefore;
-        require(received >= totalAmount, "MultiSend: Insufficient tokens received (fee-on-transfer?)");
+        if (received < totalAmount) revert InsufficientTokensReceived();
 
         // Distribute tokens
         for (uint256 i = 0; i < recipients.length; ) {
